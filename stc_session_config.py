@@ -1,4 +1,5 @@
 from SpirentSLC import SLC
+from stcrestclient import stchttp
 from SpirentSLC.Execution import *
 from wsir_api import *
 
@@ -40,9 +41,10 @@ def show_re_test_subscribers(subline):
         'show service active-subscribers detail | match "Subscriber {}"'.format(subline)
     )
     if step_response.result == "success":
-        if step_response.text:
+        subline = re.findall("\S+", step_response.text)[1]
+        if subline:
             with open("C:\\Users\\t970164\\Documents\\subscribers.txt", "w") as file:
-                file.write(step_response.text)
+                file.write(subline)
                 file.write("\n")
         else:
             raise Exception("Subscriber did not bind")
@@ -84,7 +86,7 @@ def stc_session(slc):
         properties={
             "ipAddress": "",
             "ports": "",
-            "config": "file:/C:/Users/t970164/spirent11.2.tcc",
+            "config": "file:/C:/Users/t970164/testsub.tcc",
             "forceOwnership": "false",
             "connectToPorts": "true",
             "tcl": {
@@ -133,24 +135,40 @@ def main(slc, logger, status):
             ],
         }
     )
-
     sub = hsia.get(extract_ref_id(r1))["telusHSIASubscriberLineId"]
+
     print("start stc dhcp session")
-    stc = stc_session(slc)
-    stc.subscribe("DhcpResults")
-    stc.stepSequencer()  # DHCP bind session step
-    stc.stepSequencer()  # DHCP wait for bind step
-    stc.waitSequencer()  # Pause sequencer
+    stc = stchttp.StcHttp(server="127.0.0.1", port="8888")
+    stc.new_session("nafisa", "test", kill_existing=True)
+    stc.join_session("test - nafisa")
+    config_file = "one_sub.xml"
+    stc.upload(config_file)
+    data = stc.perform("LoadFromXml", filename=config_file)
+    hProject = stc.get("system1", "children-project")
+    portList = stc.get(hProject, "children-port")
+    deviceList = stc.get(hProject, "children-emulateddevice")
+    dhcp_block = stc.get(deviceList, "children-dhcpv4blockconfig")
+
+    print("Attaching ports")
+    stc.perform("AttachPorts", portList=[portList], autoConnect="TRUE")
+    stc.apply()
+
+    stc.perform("Dhcpv4BindCommand", blockList=dhcp_block)
+    print("waiting for bind")
+    time.sleep(10)
     print("confirm sub is bound on RE")
     show_re_test_subscribers(sub)
+
     print("dhcp release")
-    stc.stepSequencer()  # DHCP release step
-    stc.waitSequencer()  # Pause sequencer
-    stc.stepSequencer()  # DHCP wait for release
-    stc.stopDevices()
+    stc.perform("Dhcpv4ReleaseCommand", blockList=dhcp_block)
+    time.sleep(10)
+
     print("clean up")
     chrg.delete(extract_ref_id(r2))
     hsia.delete(extract_ref_id(r1))
+    stc.delete(deviceList)
+    stc.delete(portList)
+    stc.delete(hProject)
 
     # chart_dhcp_bind_rate(slc)
     return procedure_result
@@ -171,7 +189,7 @@ if __name__ == "__main__":
     try:
         with SLC.init(host="localhost:9005") as slc:
             main(slc, logger, status)
-            multi_subs(slc, logger, status)
+            # multi_subs(slc, logger, status)
     except TestTermination:
         pass
     except:
