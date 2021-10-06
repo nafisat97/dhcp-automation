@@ -1,4 +1,5 @@
 from SpirentSLC import SLC
+from SpirentSLC.topology import Device
 from stcrestclient import stchttp
 from SpirentSLC.Execution import *
 from wsir_api import *
@@ -20,11 +21,17 @@ testbed_uri = "project://my_project/topologies/test1.tbml"
 
 def show_re_test_subscribers(subline):
     """Show active subscribers as a result of DHCP bind"""
+
+    # Simulates subs created in wsir
+    accounts = []
+    for i in range(20, 120):
+        accounts.append("sl_NAFISA-TEST/1/1/1/{}".format(str(i)))
+
     s1 = slc.sessions.ssh.open(
         properties={
             "ipAddress": "172.25.205.146",
             "user": "t970164",
-            "password": "cgLeUdKCiBlcle5lPgMMTYdUtGlayvWt",
+            "password": "y1etIzac1o2T/OQekPq8Ew==",
             "TerminalProperties": {
                 "prompts": [
                     {
@@ -38,16 +45,18 @@ def show_re_test_subscribers(subline):
 
     s1.command("environment no more")
     step_response = s1.command(
-        'show service active-subscribers detail | match "Subscriber {}"'.format(subline)
+        'show service active-subscribers detail | match "Subscriber sl_"'
     )
     if step_response.result == "success":
-        subline = re.findall("\S+", step_response.text)[1]
-        if subline:
-            with open("C:\\Users\\t970164\\Documents\\subscribers.txt", "w") as file:
-                file.write(subline)
-                file.write("\n")
-        else:
-            raise Exception("Subscriber did not bind")
+        sublines = re.findall("sl_\S+", step_response.text)
+        for sub in accounts:
+            if sub not in sublines:
+                # Can log this instead
+                print("Subscriber {} did not bind".format(sub))
+
+        # with open("C:\\Users\\t970164\\Documents\\subscribers.txt", "w") as file:
+        #     file.write(step_response.text)
+        #     file.write("\n")
 
 
 def chart_dhcp_bind_rate(slc):
@@ -99,7 +108,23 @@ def stc_session(slc):
 
 
 def multi_subs(slc, logger, status):
-    pass
+    accounts = []
+    for i in range(20, 120):
+        accounts.append("sl_NAFISA-TEST/1/1/1/{}".format(str(i)))
+    # pprint(accounts)
+
+    file = open("C:\\Users\\t970164\\Documents\\subscribers.txt", "r")
+    text = file.read()
+    file.close()
+    sublines = re.findall("sl_\S+", text)
+    # pprint(sublines)
+
+    not_sub = []
+    for account in accounts:
+        if account not in sublines:
+            not_sub.append(account)
+
+    print(not_sub)
 
 
 def main(slc, logger, status):
@@ -112,63 +137,104 @@ def main(slc, logger, status):
     chrg = WSIR("hsia-data-usage-charging-balance-groups")
     ids = create_ref_id()
 
-    r1 = hsia.post(
-        payload={
-            "telusServiceInstanceReferenceId": ids[0],
-            "telusHSIAAccessInterfaceId": "NAFISA-TEST 1/1/1/122",
-            "telusHSIASubscriberLineId": "sl_NAFISA-TEST/1/1/1/122",
-            "telusNetworkPolicy": [
-                "up-speed-kbps:15000",
-                "dn-speed-kbps:15000",
-                "conn-conf-set:hsia|ttv",
-            ],
-        }
-    )
+    # r1 = hsia.post(
+    #     payload={
+    #         "telusServiceInstanceReferenceId": ids[0],
+    #         "telusHSIAAccessInterfaceId": "NAFISA-TEST 1/1/1/122",
+    #         "telusHSIASubscriberLineId": "sl_NAFISA-TEST/1/1/1/122",
+    #         "telusNetworkPolicy": [
+    #             "up-speed-kbps:15000",
+    #             "dn-speed-kbps:15000",
+    #             "conn-conf-set:hsia|ttv",
+    #         ],
+    #     }
+    # )
 
-    r2 = chrg.post(
-        payload={
-            "telusServiceInstanceReferenceId": ids[0],
-            "telusChrgBlnceGrpRefId": ids[1],
-            "telusChrgBlnceGrpPolicy": [
-                "mo-dat-usage-cap:1000",
-                "bill-cycle-start-day:5",
-            ],
-        }
-    )
-    sub = hsia.get(extract_ref_id(r1))["telusHSIASubscriberLineId"]
+    # r2 = chrg.post(
+    #     payload={
+    #         "telusServiceInstanceReferenceId": ids[0],
+    #         "telusChrgBlnceGrpRefId": ids[1],
+    #         "telusChrgBlnceGrpPolicy": [
+    #             "mo-dat-usage-cap:1000",
+    #             "bill-cycle-start-day:5",
+    #         ],
+    #     }
+    # )
+    # sub = hsia.get(extract_ref_id(r1))["telusHSIASubscriberLineId"]
 
-    print("start stc dhcp session")
+    logger.info("Start stc dhcp session")
     stc = stchttp.StcHttp(server="127.0.0.1", port="8888")
     stc.new_session("nafisa", "test", kill_existing=True)
     stc.join_session("test - nafisa")
-    config_file = "one_sub.xml"
-    stc.upload(config_file)
-    data = stc.perform("LoadFromXml", filename=config_file)
-    hProject = stc.get("system1", "children-project")
-    portList = stc.get(hProject, "children-port")
-    deviceList = stc.get(hProject, "children-emulateddevice")
-    dhcp_block = stc.get(deviceList, "children-dhcpv4blockconfig")
 
-    print("Attaching ports")
-    stc.perform("AttachPorts", portList=[portList], autoConnect="TRUE")
+    # Spirent Chassis and port details
+    chassis_ip = "172.25.205.185"
+    port = "11/2"
+
+    # Project hierarchy
+    project = stc.create("project")
+    port_handle = stc.create("port", under=project)
+    stc.config(port_handle, location="//{}/{}".format(chassis_ip, port))
+
+    # Emulated device relations
+    deviceList = stc.create(
+        "emulateddevice", under=project, affiliatedPort=port_handle, DeviceCount=100
+    )
+    ethiiIf = stc.create("EthIIIf", under=deviceList)
+    vlanIF = stc.create("VlanIf", under=deviceList, StackedOn=ethiiIf)
+    ipv4If = stc.create("Ipv4If", under=deviceList, StackedOn=vlanIF)
+    stc.config(deviceList, PrimaryIf=ipv4If, ToplevelIf=ipv4If)
+    dhcp_block = stc.create(
+        "dhcpv4blockconfig",
+        under=deviceList,
+        CircuitId="NAFISA-TEST 1/1/1/@x(20,120)",
+        EnableCircuitId="TRUE",
+        EnableRelayAgent="FALSE",
+        UsesIf=ipv4If,
+    )
+
+    # Sequencer config
+    sequencer = stc.create("sequencer", under="system1")
+    bind_wait = stc.create(
+        "Dhcpv4BindWaitCommand",
+        under=sequencer,
+        attributes={"ObjectList": deviceList, "WaitTime": 100.0},
+    )
+    release_wait = stc.create(
+        "Dhcpv4ReleaseWaitCommand",
+        under=sequencer,
+        attributes={"ObjectList": deviceList, "WaitTime": 100.0},
+    )
+
+    stc.perform("SequencerInsertCommand", commandList=[bind_wait, release_wait])
+
+    logger.info("Attaching ports")
+    stc.perform("AttachPorts", portList=[port_handle], autoConnect="TRUE")
     stc.apply()
 
     stc.perform("Dhcpv4BindCommand", blockList=dhcp_block)
-    print("waiting for bind")
-    time.sleep(10)
-    print("confirm sub is bound on RE")
-    show_re_test_subscribers(sub)
+    logger.info("Waiting for bind")
+    stc.perform("SequencerStepCommand")
+    stc.perform("SequencerPauseCommand")
+    # time.sleep(10)
+    logger.info("confirm sub is bound on RE")
+    show_re_test_subscribers(None)
 
-    print("dhcp release")
+    logger.info("dhcp release")
     stc.perform("Dhcpv4ReleaseCommand", blockList=dhcp_block)
-    time.sleep(10)
+    stc.perform("SequencerStepCommand")
+    stc.perform("SequencerPauseCommand")
+    # time.sleep(10)
+    stc.perform("sequencerStopCommand")
+    stc.wait_until_complete()
 
-    print("clean up")
-    chrg.delete(extract_ref_id(r2))
-    hsia.delete(extract_ref_id(r1))
+    # print("clean up")
+    # chrg.delete(extract_ref_id(r2))
+    # hsia.delete(extract_ref_id(r1))
     stc.delete(deviceList)
-    stc.delete(portList)
-    stc.delete(hProject)
+    stc.delete(port_handle)
+    stc.delete(project)
+    stc.end_session()
 
     # chart_dhcp_bind_rate(slc)
     return procedure_result
