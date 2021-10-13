@@ -59,7 +59,7 @@ def show_re_test_subscribers(subline):
         #     file.write("\n")
 
 
-def chart_dhcp_bind_rate(slc):
+def chart_itest_dhcp_bind_rate(slc):
     stc = stc_session(slc)
 
     xdata = np.arange(6)
@@ -184,49 +184,63 @@ def main(slc, logger, status):
     vlanIF = stc.create("VlanIf", under=deviceList, StackedOn=ethiiIf)
     ipv4If = stc.create("Ipv4If", under=deviceList, StackedOn=vlanIF)
     stc.config(deviceList, PrimaryIf=ipv4If, ToplevelIf=ipv4If)
+    single_cID = "NAFISA-TEST 1/1/1/20"
+    multi_cID = "NAFISA-TEST 1/1/1/@x(20,120)"
     dhcp_block = stc.create(
         "dhcpv4blockconfig",
         under=deviceList,
-        CircuitId="NAFISA-TEST 1/1/1/@x(20,120)",
+        CircuitId=multi_cID,
         EnableCircuitId="TRUE",
         EnableRelayAgent="FALSE",
         UsesIf=ipv4If,
     )
 
+    # Subscribe to results
+    dhcp_results = stc.perform(
+        "ResultsSubscribeCommand",
+        parent=project,
+        resultParent=port_handle,
+        resultType="Dhcpv4BlockResults",
+        configType="Dhcpv4BlockConfig",
+        ViewAttributeList="BindRate",
+        FileNamePrefix="multi",
+    )
+
     # Sequencer config
     sequencer = stc.create("sequencer", under="system1")
+    bind = stc.create("Dhcpv4BindCommand", under=sequencer, BlockList=dhcp_block)
     bind_wait = stc.create(
         "Dhcpv4BindWaitCommand",
         under=sequencer,
         attributes={"ObjectList": deviceList, "WaitTime": 100.0},
     )
+    release = stc.create("Dhcpv4ReleaseCommand", under=sequencer, blockList=dhcp_block)
     release_wait = stc.create(
         "Dhcpv4ReleaseWaitCommand",
         under=sequencer,
         attributes={"ObjectList": deviceList, "WaitTime": 100.0},
     )
 
-    stc.perform("SequencerInsertCommand", commandList=[bind_wait, release_wait])
+    stc.perform(
+        "SequencerInsertCommand", commandList=[bind, bind_wait, release, release_wait]
+    )
 
     logger.info("Attaching ports")
     stc.perform("AttachPorts", portList=[port_handle], autoConnect="TRUE")
     stc.apply()
 
-    stc.perform("Dhcpv4BindCommand", blockList=dhcp_block)
-    logger.info("Waiting for bind")
-    stc.perform("SequencerStepCommand")
-    stc.perform("SequencerPauseCommand")
-    # time.sleep(10)
-    logger.info("confirm sub is bound on RE")
-    show_re_test_subscribers(None)
+    for i in range(3):
+        stc.perform("SequencerStartCommand")
+        logger.info("Waiting for bind")
 
-    logger.info("dhcp release")
-    stc.perform("Dhcpv4ReleaseCommand", blockList=dhcp_block)
-    stc.perform("SequencerStepCommand")
-    stc.perform("SequencerPauseCommand")
-    # time.sleep(10)
-    stc.perform("sequencerStopCommand")
-    stc.wait_until_complete()
+        logger.info("confirm sub is bound on RE")
+        show_re_test_subscribers(None)
+
+        logger.info("dhcp release")
+        stc.wait_until_complete()
+
+        results = stc.get(dhcp_results["ReturnedDataSet"], "ResultHandleList")
+        print(stc.get(results, "BindRate"))
 
     # print("clean up")
     # chrg.delete(extract_ref_id(r2))
@@ -236,7 +250,6 @@ def main(slc, logger, status):
     stc.delete(project)
     stc.end_session()
 
-    # chart_dhcp_bind_rate(slc)
     return procedure_result
 
 
@@ -255,7 +268,6 @@ if __name__ == "__main__":
     try:
         with SLC.init(host="localhost:9005") as slc:
             main(slc, logger, status)
-            # multi_subs(slc, logger, status)
     except TestTermination:
         pass
     except:
