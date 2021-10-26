@@ -1,7 +1,6 @@
 from datetime import datetime
 from pprint import pprint
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from SpirentSLC.Execution import response
 import requests
 import json
 import sys
@@ -9,6 +8,11 @@ import os
 import pandas as pd
 import time
 import uuid
+
+# TODO: look at performance of async http requests with tornado or something similar
+# FIXME: not all requests get completed, better logging and error handling
+#        create ref_id in csv file
+
 
 hsia_base_url = "https://nsd.teluslabs.net/hsia-service-instances/"
 
@@ -18,14 +22,14 @@ wsir_hsia_headers = {
     "Content-Type": "application/json",
     "Accept": "application/vnd.telus.api.wsir-si-hsia-v1.1+json;charset=utf-8",
     "Connection": "keep-alive",
-    "Keep-Alive": "timeout=5, max=500",
+    "Keep-Alive": "timeout=10, max=500",
 }
 
 wsir_charge_headers = {
     "Content-Type": "application/json",
     "Accept": "application/vnd.telus.api.wsir-hsia-dat-usg-chrg-blnce-grp-v1.1+json;charset=utf-8",
     "Connection": "keep-alive",
-    "Keep-Alive": "timeout=5, max=500",
+    "Keep-Alive": "timeout=10, max=500",
 }
 
 wsir_auth = ("wlndevportal", "Telus2018")
@@ -60,6 +64,13 @@ def create_ref_id():
     return ids
 
 
+def uuid_ref_id():
+    return (
+        "132" + str(uuid.uuid4().int & (1 << 64) - 1)[:16],
+        str(uuid.uuid4().int & (1 << 64) - 1)[:16],
+    )
+
+
 def extract_ref_id(response):
     return str(response["message"].split("/")[-1].split()[0])
 
@@ -89,9 +100,11 @@ def import_bulk(filename):
     payload = []
 
     for sub in bulk_subs:
+        ids = None
         wsir_charge = {}
         sub.update(wsir_service)
-        ids = create_ref_id()
+        # ids = create_ref_id()
+        ids = uuid_ref_id()
         sub["telusServiceInstanceReferenceId"] = ids[0]
         sub["telusNetworkPolicy"] = [
             f"up-speed-kbps:{str(sub.pop('up-speed-kbps'))}",
@@ -110,7 +123,7 @@ def import_bulk(filename):
             f"bill-cycle-start-day:{str(sub.pop('bill-cycle-start-day'))}",
         ]
         payload.append((sub, wsir_charge))
-        time.sleep(0.01)
+        # time.sleep(1)
 
     for request in payload:
         ref_ids["subline"].append(request[0]["telusHSIASubscriberLineId"])
@@ -118,7 +131,7 @@ def import_bulk(filename):
         ref_ids["charge"].append(request[1]["telusChrgBlnceGrpRefId"])
 
     df = pd.DataFrame(ref_ids)
-    df.to_csv(f"{directory}/ref_ids", encoding="utf-8", index=False)
+    df.to_csv(f"{directory}/ref_ids_test2", encoding="utf-8", index=False)
 
     return payload
 
@@ -190,8 +203,8 @@ def get_bulk():
 def delete_imported_bulk():
     # write to csv file with instance IDs captured from successful calls
     # delete charge before service
-    if os.path.isfile(os.path.join(directory, "ref_ids")):
-        subscriber_filepath = os.path.realpath(os.path.join(directory, "ref_ids"))
+    if os.path.isfile(os.path.join(directory, "ref_ids_test2")):
+        subscriber_filepath = os.path.realpath(os.path.join(directory, "ref_ids_test2"))
     else:
         print("File does not exist")
         sys.exit(1)
@@ -202,21 +215,21 @@ def delete_imported_bulk():
     # return data
 
     subs_to_delete = pd.read_csv(subscriber_filepath)
+    # for finding duplicate records
+    # dupes = subs_to_delete["charge"].duplicated()
+    # print(subs_to_delete["charge"][dupes])
     subs_to_delete = subs_to_delete.to_dict(orient="records")
 
     return subs_to_delete
 
 
-def post_runner():
-    threads = []
-    subs = import_bulk("subs.csv")
+def post_runner(subs):
     with ThreadPoolExecutor(max_workers=10) as executor:
         for sub in subs:
             executor.submit(post_bulk, service=sub[0], charge=sub[1])
 
 
 def delete_runner():
-    threads = []
     subs = delete_imported_bulk()
     with ThreadPoolExecutor(max_workers=10) as executor:
         for sub in subs:
@@ -224,6 +237,7 @@ def delete_runner():
 
 
 if __name__ == "__main__":
-    # post_runner()
+    # subs = import_bulk("subs.csv")
+    # post_runner(subs)
     # delete_runner()
-    pprint(delete_imported_bulk())
+    delete_imported_bulk()
