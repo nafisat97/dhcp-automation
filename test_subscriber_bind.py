@@ -1,17 +1,17 @@
 """
-    TC:1.1 - Basic Subscriber Bind Confirmation
+    TC:SUB_1 - Basic Subscriber Bind Confirmation
     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     This test is to verify whether a subscriber or set of subscribers are bound on an RE.
 
     Test Steps:
-        Step 1: Use existing subscriber accounts in WSIR
+        Step 1: Use test subscriber accounts created in WSIR
         Step 2: Create DHCP device on Spirent TestCenter (STC)
         Step 3: Start the subscriber(s) on STC
         Step 4: Execute 'show service active-subscriber' command on 7750
     
     Result:
-        Pass if list of sessions are outputted from Step 4
+        Pass if list of sessions outputted from Step 4 correspond to the accounts in WSIR
         Fail otherwise
 """
 
@@ -19,9 +19,12 @@ __author__ = "Nafisa Tabassum"
 __version__ = "1.0.0"
 
 import os
+import sys
 import unittest
 import re
+
 import HtmlTestRunner
+
 from SpirentSLC import SLC
 
 # STC session authentication
@@ -32,7 +35,7 @@ os.environ["STC_REST_API"] = "1"
 os.environ["STC_SERVER_ADDRESS"] = server_ip
 os.environ["STC_SERVER_PORT"] = "8888"
 os.environ["STC_SESSION_NAME"] = session_name
-os.environ["STC_SESSION_TERMINATE_ON_DISCONNECT"] = "False"
+os.environ["STC_SESSION_TERMINATE_ON_DISCONNECT"] = "True"
 os.environ["EXISTING_SESSION"] = "kill"
 
 from stcrestclient.stcpythonrest import StcPythonRest as StcPython
@@ -229,8 +232,14 @@ class TestSubscriberBind(unittest.TestCase):
         self.stc.perform("Dhcpv4Release", blockList=self.dhcp_block)
         self.stc.perform("Dhcpv4ReleaseWait", ObjectList=self.port1, WaitTime=100)
         if self.stc.get(self.dhcp_block, "BlockState") != "IDLE":
-            exit()
+            sys.exit(1)
+        self.stc._end_session()
 
 
 if __name__ == "__main__":
-    unittest.main(testRunner=HtmlTestRunner.HTMLTestRunner())
+    template_args = {"custom_test_case_name": "Basic Subscriber Bind Confirmation"}
+    unittest.main(
+        testRunner=HtmlTestRunner.HTMLTestRunner(
+            template=f"{os.getcwd()}\\report_template.html", template_args=template_args
+        )
+    )
